@@ -53,7 +53,7 @@ export default {
     if (url.pathname === '/' && request.method === 'GET') return new Response(SETUP_PAGE, {
       headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" }
     });
-    if (url.pathname === '/drive' && request.method === 'GET') return new Response(DRIVE_PAGE, {headers: { 'Content-Type':'text/html; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://telegram.org; connect-src 'self'; base-uri 'none'" }});
+    if (url.pathname === '/drive' && request.method === 'GET') return new Response(DRIVE_PAGE, {headers: { 'Content-Type':'text/html; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://telegram.org; img-src blob:; connect-src 'self'; base-uri 'none'" }});
     if (url.pathname === '/api/drive' && request.method === 'POST') {
       if (!env.BOT_TOKEN) return Response.json({error:'ربات هنوز تنظیم نشده است.'}, {status:503});
       const user = await telegramUser(request.headers.get('X-Telegram-Init-Data') || '', env.BOT_TOKEN);
@@ -170,10 +170,20 @@ export class Game {
       const shown = all.slice(0, 30);
       return Response.json({items:shown.map(([key, value]) => ({id:key.slice(prefix.length), name:value.name, type:value.type})), next:all.length > 30 ? shown.at(-1)[0].slice(prefix.length) : null});
     }
-    if (!['get', 'delete'].includes(action) || typeof id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(id)) return Response.json({error:'درخواست نامعتبر است.'}, {status:400});
+    if (!['get', 'delete', 'preview'].includes(action) || typeof id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(id)) return Response.json({error:'درخواست نامعتبر است.'}, {status:400});
     const key = prefix + id, file = await this.state.storage.get(key);
     if (!file) return Response.json({error:'فایل پیدا نشد.'}, {status:404});
     if (action === 'delete') { await this.state.storage.delete(key); return Response.json({ok:true}); }
+    if (action === 'preview') {
+      if (file.type !== 'photo') return Response.json({error:'پیش‌نمایش فقط برای عکس‌های ارسال‌شده به صورت عکس است.'}, {status:400});
+      try {
+        const info = await this.telegram('getFile', {file_id:file.fileId});
+        if (!info?.file_path || (info.file_size && info.file_size > 20 * 1024 * 1024)) throw new Error('unavailable');
+        const media = await fetch(`https://api.telegram.org/file/bot${this.env.BOT_TOKEN}/${info.file_path}`);
+        if (!media.ok || !media.body) throw new Error('unavailable');
+        return new Response(media.body, {headers: {'Content-Type':'image/jpeg', 'Cache-Control':'private, no-store', 'X-Content-Type-Options':'nosniff'}});
+      } catch { return Response.json({error:'پیش‌نمایش عکس در دسترس نیست.'}, {status:502}); }
+    }
     const method = {photo:'sendPhoto', video:'sendVideo', document:'sendDocument'}[file.type];
     if (!method) return Response.json({error:'نوع فایل پشتیبانی نمی‌شود.'}, {status:400});
     try { await this.telegram(method, {chat_id:user, [file.type]:file.fileId, ...(file.caption ? {caption:file.caption} : {})}); return Response.json({ok:true}); }
